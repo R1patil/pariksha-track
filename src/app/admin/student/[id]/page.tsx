@@ -468,6 +468,7 @@ import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { allSubjects, STATUS_COLORS, STATUS_LABELS, TYPE_LABELS } from "@/lib/chapters";
+import { englishChapters } from "@/lib";
 
 export default function StudentDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
