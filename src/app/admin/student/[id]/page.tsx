@@ -463,13 +463,11 @@
 //     </div>
 //   );
 // }
-
 "use client";
 import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { allSubjects, STATUS_COLORS, STATUS_LABELS, TYPE_LABELS } from "@/lib/chapters";
-//import { englishChapters } from "@/constants/chapters";
 
 export default function StudentDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -482,10 +480,6 @@ export default function StudentDetail({ params }: { params: Promise<{ id: string
   const [loading, setLoading]     = useState(true);
   const [exporting, setExporting] = useState(false);
   const [whatsappSent, setWhatsappSent] = useState(false);
-  const englishChapters: Record<string, string[]> = {
-  "1": ["Chapter 1", "Chapter 2"],
-  "2": ["Chapter 3", "Chapter 4"],
-};
   const router = useRouter();
 
   useEffect(() => {
