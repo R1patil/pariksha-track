@@ -252,7 +252,6 @@
 //   );
 // }
 
-
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
@@ -277,7 +276,7 @@ export default function AdminDashboard() {
   const [loading, setLoading]   = useState(true);
   const [filter, setFilter]     = useState<"all"|"8"|"9"|"10">("all");
   const [search, setSearch]     = useState("");
-  const [sortBy, setSortBy]     = useState<"name"|"pct"|"last_active">("class");
+  const [sortBy, setSortBy]     = useState<"name"|"pct"|"last_active">("name");
   const router = useRouter();
 
   useEffect(() => {
@@ -288,50 +287,30 @@ export default function AdminDashboard() {
 
   const loadStudents = useCallback(async () => {
     setLoading(true);
-    // Fetch all students
     const { data: studs } = await supabase
-      .from("students")
-      .select("*")
-      .order("class")
-      .order("roll_number");
-
+      .from("students").select("*").order("class").order("roll_number");
     if (!studs) { setLoading(false); return; }
 
-    // Fetch all progress
-    const { data: prog } = await supabase
-      .from("progress")
-      .select("student_id, status");
-
-    // Build progress counts per student
+    const { data: prog } = await supabase.from("progress").select("student_id, status");
     const progMap: Record<string, { done:number; reading:number }> = {};
     (prog || []).forEach((p: any) => {
       if (!progMap[p.student_id]) progMap[p.student_id] = { done:0, reading:0 };
-      if (p.status === "done") progMap[p.student_id].done++;
+      if (p.status === "done")    progMap[p.student_id].done++;
       else if (p.status === "reading") progMap[p.student_id].reading++;
     });
 
     const enriched: Student[] = studs.map(s => {
-      const total = englishChapters[s.class]?.chapters.length || 16;
+      const total  = englishChapters[s.class]?.chapters.length || 16;
       const counts = progMap[s.id] || { done:0, reading:0 };
-      return {
-        ...s,
-        done:    counts.done,
-        reading: counts.reading,
-        total,
-        pct: Math.round((counts.done / total) * 100),
-      };
+      return { ...s, done:counts.done, reading:counts.reading, total,
+        pct: Math.round((counts.done / total) * 100) };
     });
-
     setStudents(enriched);
     setLoading(false);
   }, []);
 
-  const logout = () => {
-    localStorage.removeItem("pt_admin");
-    router.replace("/admin");
-  };
+  const logout = () => { localStorage.removeItem("pt_admin"); router.replace("/admin"); };
 
-  // Filter + search + sort
   const filtered = students
     .filter(s => filter === "all" || s.class === filter)
     .filter(s => s.name.toLowerCase().includes(search.toLowerCase()) || s.roll_number.includes(search))
@@ -341,14 +320,14 @@ export default function AdminDashboard() {
       return a.name.localeCompare(b.name);
     });
 
-  // Class stats
   const classStats = ["8","9","10"].map(cls => {
     const clsStudents = students.filter(s => s.class === cls);
     const avg = clsStudents.length > 0
-      ? Math.round(clsStudents.reduce((a,s) => a + s.pct, 0) / clsStudents.length)
-      : 0;
+      ? Math.round(clsStudents.reduce((a,s) => a + s.pct, 0) / clsStudents.length) : 0;
     return { cls, count: clsStudents.length, avg };
   });
+
+  const completedStudents = students.filter(s => s.pct === 100);
 
   const timeAgo = (dt: string) => {
     const diff = Date.now() - new Date(dt).getTime();
@@ -357,11 +336,10 @@ export default function AdminDashboard() {
     if (mins < 60) return `${mins}m ago`;
     const hrs = Math.floor(mins / 60);
     if (hrs < 24) return `${hrs}h ago`;
-    return `${Math.floor(hrs / 24)}d ago`;
+    return `${Math.floor(hrs/24)}d ago`;
   };
 
-  const pctColor = (p: number) =>
-    p >= 80 ? "#10b981" : p >= 40 ? "#f59e0b" : "#ef4444";
+  const pctColor = (p: number) => p >= 80 ? "#10b981" : p >= 40 ? "#f59e0b" : "#ef4444";
 
   if (loading) {
     return (
@@ -374,6 +352,7 @@ export default function AdminDashboard() {
 
   return (
     <div style={{ minHeight:"100vh", background:"#f1f5f9" }}>
+
       {/* Header */}
       <div style={{ background:"linear-gradient(135deg,#1e293b,#334155)", padding:"20px 16px 24px" }}>
         <div style={{ maxWidth:800, margin:"0 auto" }}>
@@ -404,38 +383,33 @@ export default function AdminDashboard() {
               </div>
             ))}
           </div>
-        </div>
 
-          {/* Completion alert banner */}
-          {(() => {
-            const completed = students.filter(s => s.pct === 100);
-            if (completed.length === 0) return null;
-            return (
-              <div style={{ marginTop:12, background:"rgba(74,222,128,0.15)", borderRadius:12, padding:"10px 14px", border:"1px solid rgba(74,222,128,0.4)", display:"flex", alignItems:"center", gap:10 }}>
-                <span style={{ fontSize:16 }}>🎉</span>
-                <p style={{ fontSize:12, color:"#4ade80", fontWeight:600 }}>
-                  {completed.length} student{completed.length > 1 ? "s" : ""} completed all chapters! Click their name to send WhatsApp.
-                </p>
-              </div>
-            );
-          })()}
+          {/* Completion alert */}
+          {completedStudents.length > 0 && (
+            <div style={{ marginTop:12, background:"rgba(74,222,128,0.15)", borderRadius:12, padding:"10px 14px", border:"1px solid rgba(74,222,128,0.4)", display:"flex", alignItems:"center", gap:10 }}>
+              <span style={{ fontSize:16 }}>🎉</span>
+              <p style={{ fontSize:12, color:"#4ade80", fontWeight:600 }}>
+                {completedStudents.length} student{completedStudents.length > 1 ? "s" : ""} completed all chapters! Click their name to send WhatsApp.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Controls */}
       <div style={{ maxWidth:800, margin:"0 auto", padding:"16px 16px 8px" }}>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10 }}>
-          {/* Class filter */}
           <div style={{ display:"flex", gap:6 }}>
             {(["all","8","9","10"] as const).map(f => (
               <button key={f} onClick={() => setFilter(f)}
-                style={{ padding:"5px 14px", borderRadius:20, fontSize:11, fontWeight:600, cursor:"pointer", background: filter === f ? "#1e293b" : "white", color: filter === f ? "white" : "#64748b", border:`1px solid ${filter === f ? "#1e293b" : "#e2e8f0"}` }}>
+                style={{ padding:"5px 14px", borderRadius:20, fontSize:11, fontWeight:600, cursor:"pointer",
+                  background: filter === f ? "#1e293b" : "white",
+                  color: filter === f ? "white" : "#64748b",
+                  border:`1px solid ${filter === f ? "#1e293b" : "#e2e8f0"}` }}>
                 {f === "all" ? "All" : `Class ${f}`}
               </button>
             ))}
           </div>
-
-          {/* Sort */}
           <select value={sortBy} onChange={e => setSortBy(e.target.value as any)}
             style={{ padding:"5px 12px", borderRadius:20, fontSize:11, border:"1px solid #e2e8f0", background:"white", cursor:"pointer", outline:"none" }}>
             <option value="name">Sort: Name</option>
@@ -443,20 +417,15 @@ export default function AdminDashboard() {
             <option value="last_active">Sort: Last Active</option>
           </select>
         </div>
-
-        {/* Search */}
-        <input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
+        <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder="🔍 Search by name or roll number..."
-          style={{ width:"100%", padding:"10px 14px", borderRadius:10, border:"1px solid #e2e8f0", fontSize:13, outline:"none", background:"white" }}
-        />
+          style={{ width:"100%", padding:"10px 14px", borderRadius:10, border:"1px solid #e2e8f0", fontSize:13, outline:"none", background:"white" }} />
       </div>
 
       {/* Student list */}
       <div style={{ maxWidth:800, margin:"0 auto", padding:"8px 16px 32px" }}>
         <p style={{ fontSize:11, color:"#94a3b8", marginBottom:10 }}>
-          Showing {filtered.length} students
+          Showing {filtered.length} students · Click any student to view details, add notes, export or send WhatsApp
         </p>
 
         <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
@@ -474,7 +443,7 @@ export default function AdminDashboard() {
 
               {/* Info */}
               <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4, flexWrap:"wrap" }}>
                   <span style={{ fontWeight:700, fontSize:14, color:"#1e293b" }}>{student.name}</span>
                   <span style={{ fontSize:10, padding:"1px 8px", borderRadius:20, background:"#f1f5f9", color:"#64748b", fontFamily:"monospace" }}>
                     Roll {student.roll_number}
@@ -482,18 +451,18 @@ export default function AdminDashboard() {
                   <span style={{ fontSize:10, padding:"1px 8px", borderRadius:20, background:"#f1f5f9", color:"#64748b" }}>
                     Class {student.class}{student.section}
                   </span>
+                  {student.pct === 100 && (
+                    <span style={{ fontSize:10, padding:"1px 8px", borderRadius:20, background:"#f0fdf4", color:"#16a34a", border:"1px solid #86efac", fontWeight:700 }}>
+                      🎉 Complete!
+                    </span>
+                  )}
                 </div>
-
-                {/* Mini progress bar */}
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                   <div style={{ flex:1, height:5, background:"#f1f5f9", borderRadius:3, overflow:"hidden" }}>
                     <div style={{ height:"100%", width:`${student.pct}%`, background:pctColor(student.pct), borderRadius:3 }} />
                   </div>
-                  <span style={{ fontSize:11, fontWeight:700, color:pctColor(student.pct), minWidth:35 }}>
-                    {student.pct}%
-                  </span>
+                  <span style={{ fontSize:11, fontWeight:700, color:pctColor(student.pct), minWidth:35 }}>{student.pct}%</span>
                 </div>
-
                 <div style={{ display:"flex", gap:10, marginTop:4 }}>
                   <span style={{ fontSize:10, color:"#10b981" }}>✓ {student.done} done</span>
                   <span style={{ fontSize:10, color:"#f59e0b" }}>📖 {student.reading} reading</span>
@@ -501,16 +470,11 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              {/* Last active + complete badge */}
+              {/* Last active */}
               <div style={{ textAlign:"right", flexShrink:0 }}>
-                {student.pct === 100 && (
-                  <div style={{ fontSize:10, padding:"2px 8px", borderRadius:20, background:"#f0fdf4", color:"#16a34a", border:"1px solid #86efac", marginBottom:4, fontWeight:700 }}>
-                    🎉 Complete!
-                  </div>
-                )}
                 <div style={{ fontSize:10, color:"#94a3b8" }}>Last active</div>
                 <div style={{ fontSize:11, fontWeight:600, color:"#64748b" }}>{timeAgo(student.last_active)}</div>
-                <div style={{ fontSize:11, color:"#94a3b8", marginTop:2 }}>View & Notes →</div>
+                <div style={{ fontSize:11, color:"#6366f1", marginTop:2 }}>Notes & Export →</div>
               </div>
             </div>
           ))}
