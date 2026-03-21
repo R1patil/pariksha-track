@@ -22,8 +22,9 @@ export default function AdminDashboard() {
   const [loading, setLoading]   = useState(true);
   const [filter, setFilter]     = useState<"all"|"8"|"9"|"10">("all");
   const [search, setSearch]     = useState("");
-  const [sortBy, setSortBy]     = useState<"name"|"pct"|"last_active">("class");
+  //const [sortBy, setSortBy]     = useState<"name"|"pct"|"last_active">("class");
   const router = useRouter();
+  const [sortBy, setSortBy] = useState<"name"|"pct"|"last_active"|"class">("class");
 
   useEffect(() => {
     const isAdmin = localStorage.getItem("pt_admin");
