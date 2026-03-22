@@ -1,0 +1,15 @@
+{
+  "name": "Pariksha Track — ಪರೀಕ್ಷಾ ಟ್ರ್ಯಾಕ್",
+  "short_name": "Pariksha Track",
+  "description": "Karnataka Government School student progress tracker",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f1f5f9",
+  "theme_color": "#6366f1",
+  "orientation": "portrait",
+  "lang": "kn",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

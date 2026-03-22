@@ -1,6 +1,7 @@
 // 
 
 
+
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
@@ -9,61 +10,100 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// Retrieve relevant chunks using keyword matching (no embeddings needed)
+// ── Rate limiting: max 15 AI requests per student per hour ──
+async function checkRateLimit(studentId: string, schoolId: string): Promise<boolean> {
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { count } = await supabase
+    .from("api_usage")
+    .select("*", { count: "exact", head: true })
+    .eq("student_id", studentId)
+    .eq("endpoint", "rag")
+    .gte("created_at", oneHourAgo);
+  return (count || 0) < 15;
+}
+
+async function logUsage(studentId: string, schoolId: string) {
+  await supabase.from("api_usage").insert({
+    student_id: studentId,
+    school_id:  schoolId,
+    endpoint:   "rag",
+  });
+}
+
+// ── Keyword-based chunk retrieval ────────────────────────────
 async function getRelevantChunks(
   question: string,
   classNum: string,
-  subject: string,
-  chapterId: string
+  chapterId: string,
+  schoolId: string
 ): Promise<string[]> {
-
-  // Get ALL chunks for this chapter
   const { data: chunks } = await supabase
     .from("chapter_embeddings")
     .select("content, chunk_index")
     .eq("chapter_id", chapterId)
     .eq("class", classNum)
+    .eq("school_id", schoolId)
     .order("chunk_index");
 
-  if (!chunks || chunks.length === 0) return [];
+  // fallback: try without school_id filter (global embeddings)
+  const allChunks = chunks?.length
+    ? chunks
+    : (await supabase
+        .from("chapter_embeddings")
+        .select("content, chunk_index")
+        .eq("chapter_id", chapterId)
+        .eq("class", classNum)
+        .order("chunk_index")
+      ).data;
 
-  // Score chunks by keyword overlap with question
+  if (!allChunks || allChunks.length === 0) return [];
+
   const questionWords = question.toLowerCase()
     .replace(/[?।.,!]/g, "")
     .split(/\s+/)
     .filter(w => w.length > 3);
 
-  const scored = chunks.map(chunk => {
-    const contentLower = chunk.content.toLowerCase();
+  const scored = allChunks.map(chunk => {
+    const lower = chunk.content.toLowerCase();
     let score = 0;
     for (const word of questionWords) {
-      // Count occurrences
-      const matches = (contentLower.match(new RegExp(word, "g")) || []).length;
-      score += matches;
+      score += (lower.match(new RegExp(word, "g")) || []).length;
     }
     return { content: chunk.content, score, index: chunk.chunk_index };
   });
 
-  // Sort by score, take top 5, then sort back by index for context flow
-  const topChunks = scored
+  return scored
     .sort((a, b) => b.score - a.score)
     .slice(0, 5)
     .sort((a, b) => a.index - b.index)
     .map(c => c.content);
-
-  // If no good keyword matches, return first 3 chunks as context
-  if (topChunks.every((_, i) => scored[i]?.score === 0)) {
-    return chunks.slice(0, 4).map(c => c.content);
-  }
-
-  return topChunks;
 }
 
 export async function POST(req: NextRequest) {
+  // ── Auth: require student session token ──────────────────
+  const authHeader = req.headers.get("x-student-id");
+  const schoolHeader = req.headers.get("x-school-id");
+
+  if (!authHeader || !schoolHeader) {
+    return NextResponse.json(
+      { error: "Unauthorized. Please log in again." },
+      { status: 401 }
+    );
+  }
+
+  // ── Rate limit check ──────────────────────────────────────
+  const allowed = await checkRateLimit(authHeader, schoolHeader);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "ದಯವಿಟ್ಟು 1 ಗಂಟೆ ನಂತರ ಪ್ರಯತ್ನಿಸಿ. AI limit reached (15/hour)." },
+      { status: 429 }
+    );
+  }
+
   const { question, classNum, subject, chapterId, chapterTitle, kannadaTitle } = await req.json();
   const GROQ_KEY = process.env.GROQ_API_KEY!;
 
-  // Step 1: Check if textbook content exists for this chapter
+  // ── Get relevant textbook chunks ──────────────────────────
   const { count } = await supabase
     .from("chapter_embeddings")
     .select("*", { count: "exact", head: true })
@@ -73,59 +113,45 @@ export async function POST(req: NextRequest) {
   let context = "";
   let hasRAG  = false;
 
-  // Step 2: Retrieve relevant chunks if available
   if (count && count > 0) {
     try {
-      const relevantChunks = await getRelevantChunks(question, classNum, subject, chapterId);
-      if (relevantChunks.length > 0) {
-        context = relevantChunks
-          .map((chunk, i) => `[ಪಠ್ಯಪುಸ್ತಕ ಭಾಗ ${i + 1}]\n${chunk}`)
+      const chunks = await getRelevantChunks(question, classNum, chapterId, schoolHeader);
+      if (chunks.length > 0) {
+        context = chunks
+          .map((c, i) => `[ಪಠ್ಯಪುಸ್ತಕ ಭಾಗ ${i+1}]\n${c}`)
           .join("\n\n---\n\n");
         hasRAG = true;
       }
-    } catch (err) {
-      console.log("Chunk retrieval failed:", err);
-    }
+    } catch {}
   }
 
-  // Step 3: Build prompt
+  // ── Build system prompt ───────────────────────────────────
   const systemPrompt = hasRAG
     ? `You are an expert Karnataka KSEAB board exam teacher "ಪರೀಕ್ಷಾ ಸಹಾಯಕ".
 
-You have ACTUAL KSEAB TEXTBOOK CONTENT for:
-- Class ${classNum}th Standard | Subject: ${subject}
-- Chapter: ${kannadaTitle} (${chapterTitle})
+ACTUAL KSEAB TEXTBOOK CONTENT:
+Class ${classNum} | ${subject} | ${kannadaTitle} (${chapterTitle})
 
-TEXTBOOK CONTENT:
 ${context}
 
-ANSWERING RULES:
-1. Base your answer PRIMARILY on the textbook content above
-2. For Science/Maths: answer in BOTH Kannada AND English
-3. Match answer length to marks requested:
-   - 1 mark → 1-2 sentences, direct answer
-   - 2 marks → 2-3 key points  
-   - 3 marks → 3 numbered points with explanation
-   - 4-5 marks → Full answer: Definition → Explanation → Types/Steps → Examples → Diagram if needed
-   - Summary/Full chapter → Cover ALL topics from textbook content systematically
-4. For diagrams: list exact parts to label from the textbook
-5. End with: 📌 ಪರೀಕ್ಷಾ ಸೂಚನೆ: [what examiner wants to see]
-6. Start with: 📚 ಪಠ್ಯಪುಸ್ತಕ ಆಧಾರಿತ ಉತ್ತರ`
-    : `You are an expert Karnataka KSEAB board exam teacher "ಪರೀಕ್ಷಾ ಸಹಾಯಕ".
-
-Class: ${classNum}th Standard | Subject: ${subject}
-Chapter: ${kannadaTitle} (${chapterTitle})
-
-Textbook PDF not yet uploaded. Answer from KSEAB syllabus knowledge.
-
 RULES:
-1. Answer in BOTH Kannada AND English for Science/Maths
-2. Match answer to marks requested (1/2/3/4/5 mark format)
-3. Be thorough and exam-accurate for KSEAB Karnataka board
+1. Answer based on the textbook content above
+2. Science/Maths: answer in BOTH Kannada AND English
+3. Match answer length to marks:
+   - 1 mark: 1-2 sentences
+   - 2-3 marks: numbered points
+   - 4-5 marks: full structured answer with Definition→Explanation→Examples→Diagram note
+   - Summary: cover ALL topics systematically
 4. End with: 📌 ಪರೀಕ್ಷಾ ಸೂಚನೆ: [exam tip]
-5. Start with: ⚠️ PDF ಅಪ್ಲೋಡ್ ಆಗಿಲ್ಲ — ಸಾಮಾನ್ಯ KSEAB ಜ್ಞಾನ ಆಧಾರಿತ`;
+5. Start with: 📚 ಪಠ್ಯಪುಸ್ತಕ ಆಧಾರಿತ ಉತ್ತರ`
+    : `You are an expert Karnataka KSEAB board exam teacher "ಪರೀಕ್ಷಾ ಸಹಾಯಕ".
+Class ${classNum} | ${subject} | ${kannadaTitle} (${chapterTitle})
+PDF not uploaded yet. Answer from KSEAB syllabus knowledge.
+Answer in BOTH Kannada AND English for Science/Maths. Match answer to marks requested.
+End with: 📌 ಪರೀಕ್ಷಾ ಸೂಚನೆ: [exam tip]
+Start with: ⚠️ PDF ಅಪ್ಲೋಡ್ ಆಗಿಲ್ಲ — ಸಾಮಾನ್ಯ KSEAB ಜ್ಞಾನ`;
 
-  // Step 4: Get answer from Groq
+  // ── Call Groq ─────────────────────────────────────────────
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -145,9 +171,13 @@ RULES:
     });
 
     const data   = await res.json();
-    const answer = data.choices?.[0]?.message?.content || "ಉತ್ತರ ಸಿಗಲಿಲ್ಲ. ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.";
-    return NextResponse.json({ answer, hasRAG, chunksUsed: hasRAG ? 5 : 0 });
-  } catch (err) {
+    const answer = data.choices?.[0]?.message?.content || "ಉತ್ತರ ಸಿಗಲಿಲ್ಲ.";
+
+    // Log usage after successful call
+    await logUsage(authHeader, schoolHeader);
+
+    return NextResponse.json({ answer, hasRAG });
+  } catch {
     return NextResponse.json({ error: "AI failed" }, { status: 500 });
   }
 }
